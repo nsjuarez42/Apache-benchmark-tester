@@ -254,6 +254,7 @@ if(args.default == "y"):
     with open("./benchmark.conf","rt") as f:
         reader = csv.reader(f,delimiter=",")
         for row in reader:
+            print(row)
             if row[0] == "n":
                 n = int(row[1])
             elif row[0] == "c":
@@ -311,7 +312,7 @@ else:
     tests_directory = paths[server_name]
     results_directory = "./data"
 
-    to_csvs(run_tests(5,n,c,IP,server_name,tests_directory),results_directory)
+    to_csvs(run_tests(a,n,c,IP,server_name,tests_directory),results_directory)
 
         
     
