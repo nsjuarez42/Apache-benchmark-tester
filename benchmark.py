@@ -10,10 +10,13 @@ def series_mean_to_float(lst):
     return float(pd.Series(lst).mean())
 
 def to_csvs(data,directory):
+    server = data["server"]
+    del data["server"]
     means = {}
     prst= "Percentage of the requests served within a certain time (ms)"
     ctms = "Connection Times (ms)"
     for k,v in data.items():
+        print(k,v)
         if 'amounts' in v.keys():
             means[k] = {'mean':series_mean_to_float(v['amounts']),'unit':v['unit']}
         elif k == prst:
@@ -24,6 +27,7 @@ def to_csvs(data,directory):
         elif k == ctms:
             connection_times = {}
             for connection_type,measures in v.items():
+                print("Connection {} measures {}".format(connection_type,measures))
                 connection_times[connection_type] ={"min":series_mean_to_float(measures['min']),
                        "mean":series_mean_to_float(measures['mean']),
                        "median":series_mean_to_float(measures['median']),
@@ -31,7 +35,87 @@ def to_csvs(data,directory):
                        '[+/-sd]':series_mean_to_float(measures['[+/-sd]'])
                        }
             means[ctms]=connection_times
+    folder = os.path.join(directory,"csvs")
+    if not os.path.isdir(folder):
+        os.makedirs(folder)
+
+    for k,v in means.items():
+        print(k,v)
+
+    connection_types = ["Connect","Waiting","Total","Processing"]
+    connection_filepaths = [os.path.join(folder,i+".csv") for i in connection_types]
+    for path in connection_filepaths:
+        print(path)
+        columns = ["Server","min","mean","[+/-sd]","median","max"]
+        if not os.path.isfile(path):
+            #write empty file
+            with open(path,"w",newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow(columns)
+                conn_type = [i for i in connection_types if i in path][0]
+                row = [server,
+                       means[ctms][conn_type]["min"],
+                       means[ctms][conn_type]["mean"],
+                       means[ctms][conn_type]["[+/-sd]"],
+                       means[ctms][conn_type]["max"]]
+                writer.writerow(row)
+                
+                #write the columns server and all data in order
+        else:
+            with open(path,"a",newline='') as f:
+                writer = csv.writer(f)
+                conn_type = [i for i in connection_types if i in path][0]
+                row = [server,
+                       means[ctms][conn_type]["min"],
+                       means[ctms][conn_type]["mean"],
+                       means[ctms][conn_type]["[+/-sd]"],
+                       means[ctms][conn_type]["max"]]
+                writer.writerow(row) 
+            #read and write file
+    results_file_path = os.path.join(folder,"Results.csv")
+    print(results_file_path)
+    results_columns = ["Server","Time taken for tests","Requests per second","Time per request","Time per request (concurrent)","Transfer rate"]
+    if not os.path.isfile(results_file_path):
+        with open(results_file_path,"w",newline='') as f:
+            writer =csv.writer(f)
+            writer.writerow(results_columns)
+            row= [
+                server,
+                *[means[i]['mean'] for i in results_columns[1:]]
+            ]
+            writer.writerow(row)
+
+    else:
+        with open(results_file_path,"a",newline='') as f:
+            writer =csv.writer(f)
+            row= [
+                server,
+                *[means[i]['mean'] for i in results_columns[1:]]
+            ]
+            writer.writerow(row)
+    requests_served_path = os.path.join(folder,"Served.csv")
+    #write columns instead of rows
+    if not os.path.isfile(requests_served_path):
+        with open(requests_served_path,"w",newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(["Percentage of requests",server])
+            for k,v in means[prst].items():
+                writer.writerow([k.replace("%",""),v])
         
+    else:
+        file_contents = []
+        with open(requests_served_path,"r",newline='') as f:
+            reader = csv.reader(f)
+            for row in reader:
+                print(row)
+                file_contents.append(row)
+        print(file_contents)
+        with open(requests_served_path,'w',newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow([*file_contents[0],server])
+            for i,value in enumerate(means[prst].values()):
+                writer.writerow([*file_contents[i+1],value])
+
     for k,v in means.items():
         print(k,v)
     
@@ -42,7 +126,7 @@ def to_csvs(data,directory):
     #dont do join csvs
     pass
 
-def run_tests(amount,n,c,dst,path):
+def run_tests(amount,n,c,dst,server,path):
 
     #make a series for each data point 
     # and then add the mean to final 
@@ -51,13 +135,13 @@ def run_tests(amount,n,c,dst,path):
     
     command = "ab -n {} -c {} {}".format(n,c,dst)
 
-    data = {}
+    data = {"server":server}
 
     for i in range(amount):
         output = subprocess.check_output(command,shell=True,text=True)
         print("output #{}".format(i))
         #save apache output in plain text to verify results
-        folder = os.path.join(path,"outputs")
+        folder = os.path.join(path)
         if not os.path.isdir(folder):
             os.makedirs(folder)
         with open(os.path.join(folder,'test{}.txt'.format(i)),"wt") as f:
@@ -72,7 +156,10 @@ def run_tests(amount,n,c,dst,path):
                 return float(string)
             else:
                 return int(string)
-        for line in output[:9]:
+       
+        connection_times_i,served_i = [i for i,v in enumerate(output) if "Connection Times (ms)" in v or "Percentage of the requests" in v]
+
+        for line in output[:connection_times_i]:
             measure,amount = line.split(":")
             amount = amount.strip().split(" ")
             amount,unit = to_number(amount[0])," ".join(amount[1:])
@@ -85,9 +172,11 @@ def run_tests(amount,n,c,dst,path):
                 data[measure] = {"amounts":[amount],"unit":unit}
             else:
                 data[measure]['amounts'].append(amount)
-        for line in output[12:15]:
+        for line in output[connection_times_i+2:served_i]:
+            print("Connection line",line)
             k= "Connection Times (ms)"
             connection_type,measures = line.split(":")
+            print("Connection_type {} measures {}".format(connection_type,measures))
             measures = re.findall(r'[0-9]+[.]*[0-9]*',measures.strip())
          
             min,mean,sd,median,maximum = [to_number(i) for i in measures]
@@ -104,8 +193,9 @@ def run_tests(amount,n,c,dst,path):
                     data[k][connection_type]['[+/-sd]'].append(sd)
                     data[k][connection_type]['median'].append(median)
                     data[k][connection_type]['max'].append(maximum)
-        for line in output[17:]:
+        for line in output[served_i+1:]:
             k = "Percentage of the requests served within a certain time (ms)"
+            print("get percentage from",line)
             percentage,amount = line.strip().replace(" ","").split("%")
             if k not in data.keys():
                 data[k] = {percentage+"%":[to_number(amount)]}
@@ -207,25 +297,21 @@ else:
         
     #if data folder does not exist create it
     #find server in server_names
-    paths = {"apache/php/fpm":"./data/apache_php_fpm",
-           "nginx/php":"./data/nginx_php",
-           "apache/php":"./data/apache_php",
-           "apache":"./data/apache",
-           "nginx":"./data/nginx",
-           "node.js":"./data/node",
-           "rust":"./data/rust",
-           "go":"./data/go",
-           "python":"./data/python"
+    paths = {"apache/php/fpm":"./data/outputs/apache_php_fpm",
+           "nginx/php":"./data/outputs/nginx_php",
+           "apache/php":"./data/outputs/apache_php",
+           "apache":"./data/outputs/apache",
+           "nginx":"./data/outputs/nginx",
+           "node.js":"./data/outputs/node",
+           "rust":"./data/outputs/rust",
+           "go":"./data/outputs/go",
+           "python":"./data/outputs/python"
     }
 
-    directory = paths[server_name]
+    tests_directory = paths[server_name]
+    results_directory = "./data"
 
-    #specify dest in
-    #IP = "192.168.1.147"
-    #PATH =paths[server_name]
-    #format_data(run_tests(a,n,c,IP),server_name)
-    #print(to_csvs(run_tests(2,n,c,IP),directory))
-    to_csvs(run_tests(2,n,c,IP,directory),directory)
+    to_csvs(run_tests(5,n,c,IP,server_name,tests_directory),results_directory)
 
         
     
